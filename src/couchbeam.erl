@@ -23,10 +23,7 @@
 
 %% utilities urls 
 -export([server_url/1, uuids_url/1, db_url/1, doc_url/2, make_url/3]).
--export([request/4, request/5, request/6,
-         request_stream/4, request_stream/5, request_stream/6,
-         db_request/4, db_request/5, db_request/6]).
--export([maybe_oauth_header/4]).
+-export([db_request/4, db_request/5, db_request/6]).
 
 %% API urls
 -export([server_connection/0, server_connection/2, server_connection/4,
@@ -44,7 +41,7 @@
         open_doc/2, open_doc/3,
         delete_doc/2, delete_doc/3,
         save_docs/2, save_docs/3, delete_docs/2, delete_docs/3,
-	lookup_doc_rev/2, lookup_doc_rev/3,
+        lookup_doc_rev/2, lookup_doc_rev/3,
         fetch_attachment/3, fetch_attachment/4, fetch_attachment/5,
         stream_fetch_attachment/4, stream_fetch_attachment/5,
         stream_fetch_attachment/6, delete_attachment/3,
@@ -175,7 +172,7 @@ server_connection(Host, Port, Prefix, Options) ->
 %% @spec server_info(server()) -> {ok, iolist()}
 server_info(#server{options=IbrowseOpts}=Server) ->
     Url = binary_to_list(iolist_to_binary(server_url(Server))),
-    case request(get, Url, ["200"], IbrowseOpts) of
+    case couchbeam_httpc:request(get, Url, ["200"], IbrowseOpts) of
         {ok, _Status, _Headers, Body} ->
             Version = ejson:decode(Body),
             {ok, Version};
@@ -210,7 +207,7 @@ replicate(#server{options=IbrowseOpts}=Server, RepObj) ->
     Headers = [{"Content-Type", "application/json"}],
     JsonObj = ejson:encode(RepObj),
 
-    case request_stream({self(), once}, post, Url, IbrowseOpts, Headers,
+    case couchbeam_httpc:request_stream({self(), once}, post, Url, IbrowseOpts, Headers,
             JsonObj) of
         {ok, ReqId} ->
             couchbeam_changes:wait_for_change(ReqId);
@@ -244,7 +241,7 @@ replicate(Server, Source, Target, {Prop}) ->
 %% @spec all_dbs(server()) -> {ok, iolist()}
 all_dbs(#server{options=IbrowseOpts}=Server) ->
     Url = make_url(Server, "_all_dbs", []),
-    case request(get, Url, ["200"], IbrowseOpts) of
+    case couchbeam_httpc:request(get, Url, ["200"], IbrowseOpts) of
         {ok, _, _, Body} ->
             AllDbs = ejson:decode(Body),
             {ok, AllDbs};
@@ -256,7 +253,7 @@ all_dbs(#server{options=IbrowseOpts}=Server) ->
 %% @spec db_exists(server(), string()) -> boolean()
 db_exists(#server{options=IbrowseOpts}=Server, DbName) ->
     Url = make_url(Server, DbName, []),
-    case request(head, Url, ["200"], IbrowseOpts) of
+    case couchbeam_httpc:request(head, Url, ["200"], IbrowseOpts) of
         {ok, _, _, _} -> true;
         _Error -> false
     end.
@@ -285,7 +282,7 @@ create_db(Server, DbName, Options) ->
 create_db(#server{options=IbrowseOpts}=Server, DbName, Options, Params) ->
     Options1 = couchbeam_util:propmerge1(Options, IbrowseOpts), 
     Url = make_url(Server, dbname(DbName), Params),
-    case request(put, Url, ["201"], IbrowseOpts) of
+    case couchbeam_httpc:request(put, Url, ["201"], IbrowseOpts) of
         {ok, _Status, _Headers, _Body} ->
             {ok, #db{server=Server, name=DbName, options=Options1}};
         {error, {ok, "412", _, _}} ->
@@ -325,7 +322,7 @@ open_or_create_db(Server, DbName, Options) ->
 open_or_create_db(#server{options=IbrowseOpts}=Server, DbName, Options, Params) ->
     Url = make_url(Server, DbName, []),
     IbrowseOpts1 = couchbeam_util:propmerge1(Options, IbrowseOpts),
-    case request(get, Url, ["200"], IbrowseOpts1) of
+    case couchbeam_httpc:request(get, Url, ["200"], IbrowseOpts1) of
         {ok, _, _, _} ->
             open_db(Server, DbName, Options);
         {error, {ok, "404", _, _}} ->
@@ -343,7 +340,7 @@ delete_db(#db{server=Server, name=DbName}) ->
 %% @spec delete_db(server(), DbName) -> {ok, iolist()|{error, Error}}
 delete_db(#server{options=IbrowseOpts}=Server, DbName) ->
     Url = make_url(Server, dbname(DbName), []),
-    case request(delete, Url, ["200"], IbrowseOpts) of
+    case couchbeam_httpc:request(delete, Url, ["200"], IbrowseOpts) of
         {ok, _, _, Body} ->
             {ok, ejson:decode(Body)};
         Error ->
@@ -354,7 +351,7 @@ delete_db(#server{options=IbrowseOpts}=Server, DbName) ->
 %% @spec db_info(db()) -> {ok, iolist()|{error, Error}}
 db_info(#db{server=Server, name=DbName, options=IbrowseOpts}) ->
     Url = make_url(Server, DbName, []),
-    case request(get, Url, ["200"], IbrowseOpts) of
+    case couchbeam_httpc:request(get, Url, ["200"], IbrowseOpts) of
         {ok, _Status, _Headers, Body} ->
             Infos = ejson:decode(Body),
             {ok, Infos}; 
@@ -369,7 +366,7 @@ db_info(#db{server=Server, name=DbName, options=IbrowseOpts}) ->
 doc_exists(#db{server=Server, options=IbrowseOpts}=Db, DocId) ->
     DocId1 = couchbeam_util:encode_docid(DocId),
     Url = make_url(Server, doc_url(Db, DocId1), []),
-    case request(head, Url, ["200"], IbrowseOpts) of
+    case couchbeam_httpc:request(head, Url, ["200"], IbrowseOpts) of
         {ok, _, _, _} -> true;
         _Error -> false
     end.
@@ -581,7 +578,7 @@ stream_fetch_attachment(#db{server=Server, options=IbrowseOpts}=Db, DocId, Name,
     StartRef = make_ref(),
     Pid = spawn(couchbeam_attachments, attachment_acceptor, [ClientPid,
             StartRef, Timeout]),
-    case request_stream(Pid, get, Url, IbrowseOpts, Headers) of
+    case couchbeam_httpc:request_stream(Pid, get, Url, IbrowseOpts, Headers) of
         {ok, ReqId}    ->
             Pid ! {ibrowse_req_id, StartRef, ReqId},
             {ok, StartRef};
@@ -671,40 +668,43 @@ delete_attachment(#db{server=Server, options=IbrowseOpts}=Db, DocOrDocId, Name, 
 
 %% @doc get all documents from a CouchDB database.
 %% @equiv all_docs(Db, [])
+%% @deprecated use new api in {@link couch_view}.
 all_docs(Db) ->
     all_docs(Db, []).
 
 %% @doc get all documents from a CouchDB database. It return a 
-%% #view{} record that you can use with couchbeam_view functions:
+%% #view{} record that you can use with couchbeam_oldview functions:
 %% <ul>
-%%      <li>{@link couchbeam_view:count/1. couchbeam_view:count/1}</li>
-%%      <li>{@link couchbeam_view:fetch/1. couchbeam_view:fetch/1}</li>
-%%      <li>{@link couchbeam_view:first/1. couchbeam_view:first/1}</li>
-%%      <li>{@link couchbeam_view:fold/1. couchbeam_view:fold/1}</li>
-%%      <li>{@link couchbeam_view:foreach/1. couchbeam_view:foreach/1}</li>
+%%      <li>{@link couchbeam_oldview:count/1. couchbeam_oldview:count/1}</li>
+%%      <li>{@link couchbeam_oldview:fetch/1. couchbeam_oldview:fetch/1}</li>
+%%      <li>{@link couchbeam_oldview:first/1. couchbeam_oldview:first/1}</li>
+%%      <li>{@link couchbeam_oldview:fold/1. couchbeam_oldview:fold/1}</li>
+%%      <li>{@link couchbeam_oldview:foreach/1. couchbeam_oldview:foreach/1}</li>
 %% </ul>
 %%
 %% @spec all_docs(Db::db(), Options::list()) 
 %%              -> {ok, View::view()}|{error, term()}
+%% @deprecated use new api in {@link couch_view}.
 all_docs(Db, Options) ->
     view(Db, "_all_docs", Options).
 
 %% @doc  get view results from database
 %% @equiv view(Db, ViewName, [])
+%% @deprecated use new api in {@link couch_view}.
 view(Db, ViewName) ->
     view(Db, ViewName, []).
 
 %% @doc get view results from database. viewname is generally
 %% a tupple like {DesignName::string(), ViewName::string()} or string 
 %% like "designname/viewname". It return a #view{} record  that you can use 
-%% with couchbeam_view functions:
+%% with couchbeam_oldview functions:
 %%
 %% <ul>
-%%      <li>{@link couchbeam_view:count/1. couchbeam_view:count/1}</li>
-%%      <li>{@link couchbeam_view:fetch/1. couchbeam_view:fetch/1}</li>
-%%      <li>{@link couchbeam_view:first/1. couchbeam_view:first/1}</li>
-%%      <li>{@link couchbeam_view:fold/1. couchbeam_view:fold/1}</li>
-%%      <li>{@link couchbeam_view:foreach/1. couchbeam_view:foreach/1}</li>
+%%      <li>{@link couchbeam_oldview:count/1. couchbeam_oldview:count/1}</li>
+%%      <li>{@link couchbeam_oldview:fetch/1. couchbeam_oldview:fetch/1}</li>
+%%      <li>{@link couchbeam_oldview:first/1. couchbeam_oldview:first/1}</li>
+%%      <li>{@link couchbeam_oldview:fold/1. couchbeam_oldview:fold/1}</li>
+%%      <li>{@link couchbeam_oldview:foreach/1. couchbeam_oldview:foreach/1}</li>
 %% </ul>
 %%
 %% Options are CouchDB view parameters
@@ -713,6 +713,8 @@ view(Db, ViewName) ->
 %%
 %% @spec view(Db::db(), ViewName::string(), Options::list()) 
 %%          -> {ok, View::view()}|{error, term()}
+%% @deprecated use new api in {@link couch_view}.
+
 view(#db{server=Server}=Db, ViewName, Options) ->
     ViewName1 = couchbeam_util:to_list(ViewName),
     Options1 = couchbeam_util:parse_options(Options),
@@ -809,6 +811,7 @@ compact(#db{server=Server, options=IbrowseOpts}=Db, DesignName) ->
 %% instead use  ```changes_wait_once''' or continuous, use 
 %% ```wait_once'''
 %% @equiv changes(Db, [])
+%% @deprecated Use {@link couchbeam_changes:fetch/1} instead.
 changes(Db) ->
     changes(Db, []).
 
@@ -823,9 +826,13 @@ changes(Db) ->
 %%                  {filter, string()} |
 %%                  {since, integer()|string()} |
 %%                  {heartbeat, string()|boolean()}
+%% @deprecated Use {@link couchbeam_changes:fetch/2} instead.
 changes(#db{server=Server, options=IbrowseOpts}=Db, Options) ->
+    ?DEPRECATED(<<"couchbeam:changes and couchbeam:changes_wait_once">>, 
+        <<"couchbeam_changes:fetch">>,
+        <<"in version 0.8">>),
     Url = make_url(Server, [db_url(Db), "/_changes"], Options),
-    case request_stream({self(), once}, get, Url, IbrowseOpts) of
+    case couchbeam_httpc:request_stream({self(), once}, get, Url, IbrowseOpts) of
         {ok, ReqId} ->
             couchbeam_changes:wait_for_change(ReqId);
         {error, Error} -> {error, Error}
@@ -833,16 +840,19 @@ changes(#db{server=Server, options=IbrowseOpts}=Db, Options) ->
 
 %% @doc wait for longpoll changes 
 %% @equiv changes_wait_once(Db, [])
+%% @deprecated Use {@link couchbeam_changes:fetch/1}  instead.
 changes_wait_once(Db) ->
     changes_wait_once(Db, []).
 
 %% @doc wait for longpoll changes 
+%% @deprecated Use {@link couchbeam_changes:fetch/2} instead.
 changes_wait_once(Db, Options) ->
     Options1 = [{"feed", "longpoll"}|Options],
     changes(Db, Options1). 
 
 %% @doc wait for continuous changes 
 %% @equiv changes_wait(Db, ClientPid, [])
+%% @deprecated Use {@link couchbeam_changes:stream/2}  instead.
 changes_wait(Db, ClientPid) ->
     changes_wait(Db, ClientPid, []).
 
@@ -859,13 +869,17 @@ changes_wait(Db, ClientPid) ->
 %%          <dt>{error, term()}</dt>
 %%              <dd>n error occurred</dd>
 %%      </dl> 
-%% @spec changes_wait(Db::db(), Pid::pid(), Options::changeoptions()) -> term() 
+%% @spec changes_wait(Db::db(), Pid::pid(), Options::changeoptions()) -> term()
+%% @deprecated Use {@link couchbeam_changes:stream/3} instead.
 changes_wait(#db{server=Server, options=IbrowseOpts}=Db, ClientPid, Options) ->
+    ?DEPRECATED(<<"couchbeam:changes_wait">>,
+        <<"couchbeam_changes:stream">>,
+        <<"in version 0.8">>),
     Options1 = [{"feed", "continuous"}|Options],
     Url = make_url(Server, [db_url(Db), "/_changes"], Options1),
     StartRef = make_ref(),
     Pid = proc_lib:spawn_link(couchbeam_changes, continuous_acceptor, [ClientPid, StartRef]),
-    case request_stream({Pid, once}, get, Url, IbrowseOpts) of
+    case couchbeam_httpc:request_stream({Pid, once}, get, Url, IbrowseOpts) of
         {ok, ReqId}    ->
             Pid ! {ibrowse_req_id, StartRef, ReqId},
             {ok, StartRef};
@@ -922,7 +936,7 @@ make_url(Server=#server{prefix=Prefix}, Path, Query) ->
             [server_url(Server),
              Prefix, "/",
              Path,
-             [ ["?", couchbeam_util:urlencode(Query1)] || Query1 =/= [] ]
+             [ ["?", mochiweb_util:urlencode(Query1)] || Query1 =/= [] ]
             ])).
 
 db_request(Method, Url, Expect, Options) ->
@@ -930,7 +944,7 @@ db_request(Method, Url, Expect, Options) ->
 db_request(Method, Url, Expect, Options, Headers) ->
     db_request(Method, Url, Expect, Options, Headers, []).
 db_request(Method, Url, Expect, Options, Headers, Body) ->
-    case request(Method, Url, Expect, Options, Headers, Body) of
+    case couchbeam_httpc:request(Method, Url, Expect, Options, Headers, Body) of
         Resp = {ok, _, _, _} ->
             Resp;
         {error, {ok, "404", _, _}} ->
@@ -941,53 +955,6 @@ db_request(Method, Url, Expect, Options, Headers, Body) ->
             {error, precondition_failed};
         Error -> 
             Error
-    end.
-
-%% @doc send an ibrowse request
-request(Method, Url, Expect, Options) ->
-    request(Method, Url, Expect, Options, [], []).
-request(Method, Url, Expect, Options, Headers) ->
-    request(Method, Url, Expect, Options, Headers, []).
-request(Method, Url, Expect, Options, Headers, Body) ->
-    Accept = {"Accept", "application/json, */*;q=0.9"},
-    {Headers1, Options1} = maybe_oauth_header(Method, Url, Headers, Options),
-    case ibrowse:send_req(Url, [Accept|Headers1], Method, Body, 
-            [{response_format, binary}|Options1], ?TIMEOUT) of
-        Resp={ok, Status, _, _} ->
-            case lists:member(Status, Expect) of
-                true -> Resp;
-                false -> {error, Resp}
-            end;
-        Error -> Error
-    end.
-
-%% @doc stream an ibrowse request
-request_stream(Pid, Method, Url, Options) ->
-    request_stream(Pid, Method, Url, Options, []).
-request_stream(Pid, Method, Url, Options, Headers) ->
-    request_stream(Pid, Method, Url, Options, Headers, []).
-request_stream(Pid, Method, Url, Options, Headers, Body) ->
-    {Headers1, Options1} = maybe_oauth_header(Method, Url, Headers, Options),
-    {ok, ReqPid} = ibrowse_http_client:start_link(Url),
-
-    case ibrowse:send_req_direct(ReqPid, Url, Headers1, Method, Body,
-                          [{stream_to, Pid},
-                           {response_format, binary},
-                           {inactivity_timeout, infinity}|Options1],
-                           ?TIMEOUT) of
-        {ibrowse_req_id, ReqId} ->
-            {ok, ReqId};
-        Error ->
-            Error
-    end.
-
-maybe_oauth_header(Method, Url, Headers, Options) ->
-    case couchbeam_util:get_value(oauth, Options) of
-        undefined -> 
-            {Headers, Options};
-        OauthProps ->
-            Hdr = couchbeam_util:oauth_header(Url, Method, OauthProps),
-            {[Hdr|Headers], proplists:delete(oauth, Options)}
     end.
 
 %%---------------------------------------------------------------------------
@@ -1051,12 +1018,12 @@ do_get_uuids1(Acc, [Uuid|Rest], Count) ->
 
 get_new_uuids(Server=#server{host=Host, port=Port, options=IbrowseOptions}) ->
     Url = make_url(Server, "_uuids", [{"count", "1000"}]),  
-    case request(get, Url, ["200"], IbrowseOptions) of
+    case couchbeam_httpc:request(get, Url, ["200"], IbrowseOptions) of
         {ok, _Status, _Headers, Body} ->
             {[{<<"uuids">>, Uuids}]} = ejson:decode(Body),
             ServerUuids = #server_uuids{host_port={Host,
                         Port}, uuids=Uuids},
-            ets:insert(couchbeam_uuids, ServerUuids),
+                ets:insert(couchbeam_uuids, ServerUuids),
             {ok, ServerUuids};
         Error ->
             Error
